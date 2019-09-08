@@ -1,0 +1,245 @@
+% This function takes a single *.psv file and obtains the probablity and 
+% label of sepsis in 6 hour-time
+
+function [score, label ]= get_sepsis_score (data , model)
+
+
+
+% choosing (1)HR, (2)Temp, (3)SBP, (4)Resp, (5)Creatinine, (6)Glucose, 
+% (7)WBC, (8) Plateletes, (9)Age, (10)Gender, (11)HospAdmTime, (12)ICULOS
+    All_data = [];
+    %k = importdata(data); k = k.data ;
+    k = data;
+    %label = k(: , 41);
+    k = [k(: , 1), k(: , 3), k(: , 4), k(: , 7), k(: , 20), k(: , 22), ...
+          k(: , 32), k(: , 34:36), k(: , 39) , k(: , 40)];
+      
+      
+% filling scatter NaNs with last measurements
+    k_filled = fillmissing (k , 'previous');
+    k_filled = fillmissing(k_filled , 'nearest');
+    [k_row , ~] = size(k_filled);
+    
+% filling NaN columns using MCMC for Mean value of features 1 to 8
+    
+    if k_row ==1
+        k_Avg = k_filled (: , 1:8);
+    else
+        k_Avg = nanmean (k_filled(: , 1:8)) ;
+    end
+    % covariance of the whole 40336 patients / 8 variables
+    sigma = [209.733215923133,2.00020263974049,-29.6652893783439,12.4045838359039,...
+        -0.500682417703814,47.0537134469784,14.7152544124957,71.1125043059593;...
+        2.00020263974049,0.275472004600350,0.151884134680338,0.110585581566374,...
+        -0.123275460618312,-0.322364578351246,0.371254924011472,-2.00501382952904;...
+        -29.6652893783439,0.151884134680338,317.824179937667,-0.638846726916165,...
+        3.79856589198328,45.1329089387977,-8.11554185733313,60.2944024080619;...
+        12.4045838359039,0.110585581566374,-0.638846726916165,11.7698431120589,...
+        0.0908943799980654,4.21473470539307,1.40217682221922,29.2203351139564;...
+        -0.500682417703814,-0.123275460618312,3.79856589198328,0.0908943799980654,...
+        3.21935140879654,-0.742468387737441,-0.647334167319849,-7.57827123566735;...
+        47.0537134469784,-0.322364578351246,45.1329089387977,4.21473470539307,...
+        -0.742468387737441,1412.82566709890,25.2268220596181,52.0771842662451;...
+        14.7152544124957,0.371254924011472,-8.11554185733313,1.40217682221922,...
+        -0.647334167319849,25.2268220596181,43.9041318084915,110.605581834994;...
+        71.1125043059593,-2.00501382952904,60.2944024080619,29.2203351139564,...
+        -7.57827123566735,52.0771842662451,110.605581834994,9929.37975104238];
+    % mean of the whole 40336 patients / 8 variables
+    mu = [83.7913299674018,36.8308777694065,123.423428011797,18.5214803340009,...
+        1.43483432311318,131.731735914291,11.0875129980314,208.066705599605];
+    % Markov Chain Monte Carlo Simulatuoin/ multi-variate Normal (Gaussian)
+    % distribution
+    MCMC = mvnrnd (mu, sigma , 100000);
+    Mmean_corrected = k_Avg; % to be filled
+    P_Avg = k_Avg; % to be removed
+    mcmc = MCMC ; % to be removed
+    p = find (isnan(k_Avg(1 , :)));
+    P_Avg(: , p) = []; mcmc(: , p) = [];
+    t= ismembertol(mcmc , P_Avg , 0.75 , 'ByRows' , true);
+    q = find (t==1);
+    Mmean_corrected (1,p) = nanmean (MCMC(q , p));
+    
+    % filling the NaN columns with Mean value obtained by MCMC
+    
+       [row , col] = find(isnan(k_filled));
+
+       for j = 1:length(row) 
+           if sum(ismember((1:8) , col(j)))>0
+       k_filled(row(j) , col(j)) = Mmean_corrected(1, col(j));
+           end
+           if col(j)==9
+               k_filled(row(j), col(j)) = 62;
+           elseif col(j)==10
+               k_filled(row(j), col(j)) = 1;
+           elseif col(j) ==11
+               k_filled(row(j), col(j)) = -78.77;
+           elseif col(j) ==12 
+               k_filled(row(j), col(j)) = 30;
+           end       
+       end
+  clearvars -except k_filled model  k_row  
+% getting the overall feature to know the group (1,2,3 or 4?)
+
+if k_row ==1
+    Avg = k_filled (: , 1:8);
+else
+    Avg = mean (k_filled(: , 1:8));
+end
+
+first = k_filled(1 , 1:8);
+    % screening tool score
+     % HR
+     if Avg(1, 1)>90
+         scores(1,1) = 2 ; 
+     else
+        scores(1,1) = 0 ;
+     end
+     
+     % temp 
+      if Avg(1, 2)>38 
+          scores(1,2) = 4 ;
+      elseif Avg(1, 2)<36
+          scores(1,2) = 1 ;
+      else
+          scores(1,2) = 0;
+      end
+      
+      % Resepiratory 
+      if Avg(1,4) > 22
+          scores(1,4) = 1;
+      else
+          scores(1,4) = 0;
+      end
+      
+      % SBP
+      if Avg(1,3) <90
+          scores(1,3) = 2;
+      else
+          scores(1,3) = 0;
+      end
+ 
+ 
+      % Plateletes,  SOFA - from sepsis manual
+      if Avg(1,8) < 20
+          scores(1,8) = 4 ; 
+      elseif Avg(1,8) < 50
+          scores(1,8) = 3 ;
+      elseif Avg(1,8) < 100
+          scores(1,8) = 2 ;
+      elseif Avg(1,8) < 150
+          scores(1,8) = 1 ;
+      else
+          scores(1,8) = 0;
+      end
+      
+      % Glusose, SIRS - from sepsis Manual
+      if Avg(1,6) >(7.7* 18) % to convert mmol/L to mg/dl 
+          scores(1,6) = 1 ;
+      else
+          scores(1,6) = 0;
+      end
+      
+      % Creatinine SOFA
+      if Avg(1,5) >=(440*20)
+          scores(1,5) = 4;
+      elseif(Avg(1,5) >=(300 * 20))
+          scores(1,5) = 3;
+      elseif Avg(1,5) >= (171*20)
+          scores (1,5) = 2;
+      else
+          scores(1,5) = 1;
+      end
+      
+      % WBC SIRS
+      if Avg(1 , 7)>=12 || Avg(1,7)<=4 
+          scores(1,7) = 1;
+      else
+          scores(1,7) = 0;
+      end
+          
+
+    % SS score
+for i = 1:8
+    if Avg (1 ,i) > first(1 ,i)
+        SS(1 , i) = 1;
+    elseif Avg (1 ,i) < first(1 ,i)
+        SS(1 , i) = -1;
+    else
+        SS(1 , i) = 0;
+    end
+end
+overall = [scores , SS];
+overall = sum(overall);
+if overall >=9
+    g = 4;
+elseif overall>=4 
+    g = 3;
+elseif overall>=1
+    g = 2;
+else
+    g = 1;
+end
+
+
+modelall = model.(sprintf('UlsterTrained_%g', g));
+  clearvars -except k_filled modelall k_row
+  
+  [y, s ] = modelall.predictFcn(k_filled);
+
+       
+% Running through classification
+
+if k_row <6 
+    k_filled = repmat(k_filled , 6 , 1);
+end
+
+y1 = 1;
+       for y = 1: (size(k_filled , 1)-5)
+           if y1+5<= size(k_filled , 1)
+               processed (y , 1:8) = mean(k_filled (y1:y1+5 , 1:8));
+               processed(y , 9:12) = max(k_filled (y1:y1+5 , 9:12));
+               
+           else
+                processed (y , 1:8) = mean(k_filled (y1:end , 1:8));
+               processed(y , 9:12) = max(k_filled (y1:end , 9:12));
+              
+           end
+           y1=y1+1;
+           clear d
+       end
+       
+       %if k_row ~=1  
+       toadd = processed (1, :) ; 
+        toadd = repmat (toadd, 5 , 1);
+       processed = [toadd ; processed ];
+       %end
+       
+      
+       [y, s ] = modelall.predictFcn(processed);
+       label = y (end);
+       % bias correction of scores based on "Calibrating probability wth Undersampling 
+       % for underbalanced classification" Pozzolo, et al. (2015)
+       s = 0.9999* max(s')'  ;
+       for b = 1:length(y)
+           if y(b) ==0
+               beta = modelall.ClassificationKNN.Prior(1,2);
+           else
+               beta = modelall.ClassificationKNN.Prior(1,1);
+           end
+          k = beta*s(b)/(beta*s(b) -s(b)+1);
+          score1(b,1) = round(k , 4);
+           clear beta k
+       end
+          score =score1(end) ;
+       clear toadd
+       
+       %%%%% score
+
+     %}      
+           
+               
+                   
+       
+end    
+% 
+%              
